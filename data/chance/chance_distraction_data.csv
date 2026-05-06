@@ -1,0 +1,65 @@
+participant,Marked for review?,video notes (AA),Review complete? (AA),Final decision
+1,No,No issues,True,Include
+2,No,No issues,True,Include
+3,No, No issues,True,Include
+4,No, No issues,True,Include
+5,No,"Parent asked some extra questions about the ""why are you surprised"" part",True,Include
+6,Yes,"Child didn't really respond to questions, parent did lots of prompting",True,Exclude
+7,No,No issues,True,Include
+8,No,No issues,True,Include
+9,No,No issues,True,Include
+10,No,No issues,True,Include
+11,No,No issues,True,Include
+12,Yes,Parent had very salient facial expressions before child responded,True,Exclude
+13,No,No issues,True,Include
+14,No,No issues,True,Include
+16,Yes,Video is blacked out,True,Exclude
+17,No,No issues,True,Include
+18,No,No issues,True,Include
+19,No,No issues,True,Include
+20,Yes,Child skipped open-ended questions,True,Exclude
+21,No,No issues,True,Include
+22,Yes,"Sibling was running around in the background, strong interference",True,Exclude
+23,No,No issues,True,Include
+24,No,No issues,True,Include
+25,No,No issues,True,Include
+26,Yes,No video,True,Exclude
+27,Yes,"Background noise, but otherwise fine. Parent supplemented final response to open-ended question being ""Because""",True,Include
+28,No,No issues,True,Include
+29,No,No issues,True,Include
+31,No,No issues,True,Include
+32,No,No issues,True,Include
+33,No,No issues,True,Include
+34,No,No issues,True,Include
+35,No,No issues,True,Include
+36,No,No issues,True,Include
+37,No,No issues,True,Include
+38,Yes,"Background noise by sibling, child seems to not follow",True,Exclude
+39,Yes,"Child starts crying, ends early?",True,Exclude
+40,No,No issues,True,Include
+41,No,No issues,True,Include
+43,No,No issues,True,Include
+44,Yes,Child seems really tired/distracted?,True,Exclude
+46,Yes,TV show running on the side? Also child skipped all open-ended questions,True,Exclude
+48,No,No issues,True,Include
+49,No,No issues,True,Include
+50,Yes,No participation / video,True,Exclude
+51,No,No issues,True,Include
+53,No,No issues,True,Include
+54,No,No issues,True,Include
+55,Yes,Video froze / unavailable,True,Exclude
+56,No,No issues,True,Include
+57,No,No issues,True,Include
+58,Yes,"Parent had salient reaction before child responded, and also rephrased question to say ""are you surprised, yeah?""",True,Exclude
+59,No,No issues,True,Include
+60,No,No issues,True,Include
+61,No,No issues,True,Include
+62,No,No issues,True,Include
+63,No,No issues,True,Include
+64,No,No issues,True,Include
+65,No,No issues,True,Include
+66,No,No issues,True,Include
+67,No,No issues,True,Include
+68,No,No issues,True,Include
+69,No,No issues,True,Include
+70,No,No issues,True,Include

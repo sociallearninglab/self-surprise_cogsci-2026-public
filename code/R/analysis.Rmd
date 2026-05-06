@@ -1,0 +1,2535 @@
+---
+title: "Overoptimistic predictions and well-calibrated expectations"
+subtitle: "Children say they will achieve unrealistic outcomes but are surprised when they do"
+author: "Adani B. Abutto, Misha O'Keeffe, Hyowon Gweon"
+date: "`r Sys.Date()`"
+
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+
+header-includes:
+    - \usepackage{setspace}\doublespacing
+---
+
+```{r setup, include = F, message = F, warning = F}
+
+## load relevant libraries and functions
+require(knitr)         # for knitting
+library(DT)            # for datatable() function
+library(ordinal)       # for regression
+library(Hmisc)         # for bootstrapped confidence intervals
+library(ggeffects)     # for logistic regression outputs
+library(effectsize)    # for effect sizes
+library(png)           # for working with images
+library(grid)
+library(gganimate)
+library(gifski)
+library(patchwork)     # for multiple plots
+library(tidyverse)     # for everything else
+library(ggpubr)
+library(dplyr)
+
+## set default code chunk options
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+
+## set default plot theme 
+theme_set(theme_classic() + 
+            theme(text = element_text(size = 18))) 
+
+plotcolors <- c("#636363", "#0C7BDC")
+
+## fix print width for knitted doc
+options(width = 70)
+
+## suppress warnings about grouping 
+options(dplyr.summarise.inform = F)
+options(xtable.floating = F)
+options(xtable.timestamp = "")
+
+## set random seed
+set.seed(1)
+
+## set directories for plots and data outputs
+figures_dir = '../../figures/'
+data_dir = '../../data/'
+```
+
+# Data Import
+
+Task data for chance-based game:
+
+```{r}
+
+df.chance_raw =
+  as_tibble(read_csv(paste0(data_dir, "chance/chance_data.csv")))
+
+```
+
+Distraction data for chance-based game:
+
+```{r}
+
+df.chance_distraction =
+  as_tibble(read_csv(paste0(data_dir, "chance/chance_distraction_data.csv")))  
+
+df.chance_distraction =
+  df.chance_distraction %>%
+  dplyr::select(subject_id = participant, `Final decision`)
+
+```
+
+Task data for memory game:
+
+```{r}
+
+df.memory_raw =
+  as_tibble(read_csv(paste0(data_dir, "memory/memory_data.csv")))
+
+```
+
+Distraction data for memory game:
+
+```{r}
+
+df.memory_distraction =
+  as_tibble(read_csv(paste0(data_dir, "memory/memory_distraction_data.csv")))  
+
+df.memory_distraction =
+  df.memory_distraction %>%
+  dplyr::select(subject_id = participant, `Final decision`)
+
+```
+
+
+# Data Cleaning
+
+Chance-based task:
+
+```{r}
+
+df.chance =
+  df.chance_raw %>%
+    # mutate column values
+    mutate(
+      # rename conditions
+      condition = case_when(condition ==
+                              "surprising" ~ "Uncued",
+                            condition ==
+                              "unsurprising" ~ "Cued"),
+      # create age bin variable
+      age_bin = case_when(age_years < 5.00 ~ 4,
+                             age_years >= 5.00 ~ 5),
+      # convert gender to numeric (1 is female)
+      gender = case_when(child_gender == "f" ~ 1,
+                         child_gender == "m" ~ 0),
+      # use participant as subject ID
+      subject_id = participant,
+      # evaluate attention check questions (correct = 1)
+      controlq = case_when(attention_check_1 == "correct" ~ 1,
+                           attention_check_1 == "incorrect" ~ 0),
+      # convert surprise scale to numeric/ordinal
+      surprise_binary = case_when(surprise_binary == "not_surprised" ~ 0,
+                                  surprise_binary == "surprised" ~ 1),
+      # convert surprise scale to numeric/ordinal
+      surprise_likert = case_when(surprise_likert == "very_surprised" ~ 3,
+                                  surprise_likert == "pretty_surprised" ~ 2,
+                                  surprise_likert == "a_little_surprised" ~ 1,
+                                  surprise_binary == "0" ~ 0),
+      # add version information
+      version = "Within-Subject",
+      game = "Chance-Based") %>%
+    # convert relevant cols to factor format
+    mutate(
+      # convert surprise scale to numeric/ordinal
+      surprise_binary = factor(surprise_binary,
+                                    levels = c(0, 1),
+                                    labels = c("Not surprised",
+                                               "Surprised"),
+                                    ordered = T),
+      surprise_likert = factor(surprise_likert,
+                                    levels = c(0, 1, 2, 3),
+                                    labels = c("Not surprised",
+                                               "A little surprised",
+                                               "Pretty surprised",
+                                               "Very surprised"),
+                             ordered = T),
+           prediction = factor(prediction,
+                               levels = c(0, 1, 2, 3),
+                               ordered = T),
+           condition = factor(condition)) %>%
+    # select & rename the final columns
+    dplyr::select(subject_id,
+           game,
+           version,
+           completed,
+           age_days = child_age,
+           age_years,
+           age_bin,
+           gender,
+           condition,
+           flipped,
+           controlq,
+           no_marked_cards = no_marked_cards_chosen,
+           surprise_binary,
+           surprise_likert,
+           prediction)
+
+
+# add distraction information
+df.chance =
+  df.chance %>%
+  left_join(
+    df.chance_distraction %>% select(subject_id, exclusion = `Final decision`),
+    by = "subject_id") %>%
+  # add column describing hypothesis alignment
+  mutate(hypothesis_alignment =
+           case_when(condition == "Uncued" &
+                       surprise_binary == "Surprised" ~
+                       "aligned",
+                     condition == "Cued" &
+                       surprise_binary == "Not surprised" ~
+                       "aligned",
+                     condition == "Uncued" &
+                       surprise_binary == "Not surprised" ~
+                       "against",
+                     condition == "Cued" &
+                       surprise_binary == "Surprised" ~
+                       "against"))
+
+```
+
+Memory task:
+
+```{r}
+
+df.memory =
+  df.memory_raw %>%
+    # mutate column values
+    mutate(
+      # rename conditions
+      condition = case_when(condition ==
+                              "surprising" ~ "Uncued",
+                            condition ==
+                              "unsurprising" ~ "Cued"),
+      # convert gender to numeric (1 is female)
+      gender = case_when(child_gender == "f" ~ 1,
+                         child_gender == "m" ~ 0),
+      # create age bin variable
+      age_bin = case_when(age_years < 5.00 ~ 4,
+                             age_years >= 5.00 ~ 5),
+      # use participant as subject ID
+      subject_id = participant,
+      # evaluate attention check questions (correct = 1)
+      controlq = case_when(attention_check == "correct" ~ 1,
+                           attention_check == "incorrect" ~ 0),
+      # convert binary surprise to numeric/ordinal
+      surprise_binary =
+        case_when(surprise_binary == "not_surprised" ~ 0,
+                  surprise_binary == "surprised" ~ 1),
+      # convert graded surprise to numeric/ordinal
+      surprise_likert =
+        case_when(surprise_likert == "very_surprised" ~ 3,
+                  surprise_likert == "pretty_surprised" ~ 2,
+                  surprise_likert == "a_little_surprised" ~ 1,
+                  surprise_binary == 0 ~ 0),
+      # add version information
+      version = "Within-Subject",
+      game = "Memory") %>%
+    # convert relevant cols to factor format
+    mutate(surprise_binary = factor(surprise_binary,
+                                    levels = c(0, 1),
+                                    labels = c("Not surprised",
+                                               "Surprised"),
+                                    ordered = T),
+           surprise_likert = factor(surprise_likert,
+                                    levels = c(0, 1, 2, 3),
+                                    labels = c("Not surprised",
+                                               "A little surprised",
+                                               "Pretty surprised",
+                                               "Very surprised"),
+                                    ordered = T),
+           prediction = factor(prediction,
+                               levels = c(0, 1, 2, 3),
+                               ordered = T),
+           condition = factor(condition),
+           # counterbalancing = factor(counterbalancing)
+           ) %>%
+    # select & rename the final columns
+    select(subject_id,
+           game,
+           version,
+           completed,
+           age_years,
+           age_bin,
+           gender,
+           condition,
+           flipped,
+           controlq,
+           first_choice, first_choice_dist,
+           second_choice, second_choice_dist,
+           third_choice, third_choice_dist,
+           n_star_cards_selected,
+           surprise_binary,
+           surprise_likert,
+           prediction)
+
+# add distraction information
+df.memory =
+  df.memory %>%
+  left_join(
+    df.memory_distraction %>% select(subject_id, exclusion = `Final decision`),
+    by = "subject_id") %>%
+  # add column describing hypothesis alignment
+  mutate(hypothesis_alignment =
+           case_when(condition == "Uncued" &
+                       surprise_binary == "Surprised" ~
+                       "aligned",
+                     condition == "Cued" &
+                       surprise_binary == "Not surprised" ~
+                       "aligned",
+                     condition == "Uncued" &
+                       surprise_binary == "Not surprised" ~
+                       "against",
+                     condition == "Cued" &
+                       surprise_binary == "Surprised" ~
+                       "against"))
+
+```
+
+# Exclusions
+
+## Attention check responses
+
+Chance-based:
+
+```{r}
+
+# attention check question (which cards will you try to find? cards with a star like this, or cards without a star, like this?)
+df.chance %>%
+  group_by(condition) %>%
+  count(condition, controlq)
+  
+# number of marked cards picked (in "Expected Success" condition, did children pick all 3 cards with the marker on the back?)
+df.chance %>%
+  group_by(condition) %>%
+  filter(condition == "Cued") %>%
+  count(condition, no_marked_cards)
+
+```
+
+Memory:
+
+```{r}
+
+# attention check question (which cards will you try to find? cards with a star like this, or cards without a star, like this?)
+df.memory %>%
+  group_by(condition) %>%
+  count(condition, controlq)
+  
+# number of marked cards picked (in "Expected Success" condition, did children pick all 3 cards with the marker on the back?)
+df.memory %>%
+  group_by(condition) %>%
+  filter(condition == "Cued") %>%
+  count(condition, n_star_cards_selected)
+
+```
+
+## Filtering
+
+Exclusions for chance-based game (n = 22)
+
+```{r}
+
+df.chance_analysis =
+  df.chance %>%
+  # exclude incomplete sessions (n = 6)
+  filter(completed == T) %>%
+  # exclude children who chose fewer than 3 marked cards in unsurprising (n = 5)
+  filter(!(condition == "Cued" & no_marked_cards != 3))
+
+table(df.chance_analysis$exclusion,
+      df.chance_analysis$hypothesis_alignment)
+
+```
+
+```{r}
+
+df.chance_analysis =
+  df.chance_analysis %>%
+  # exclude distracted children as identified via LookIt videos (n = 12) (cf. https://docs.google.com/spreadsheets/d/199JbqM0qQfbuu_J_h6qxV3ffTw6Ode_ccKoyfnNW8Z8/edit?gid=0#gid=0)
+  filter(exclusion != "Exclude")
+
+```
+
+Exclusions for memory game (n = 17+19 = 36)
+
+```{r}
+
+df.memory_analysis =
+  df.memory %>%
+  # filter participants too young (under 4; n = 1)
+  filter(age_years > 4.00) %>%
+  # exclude incomplete sessions (n = 4)
+  filter(completed == T) %>%
+  # exclude wrong control q answers (n = 7)
+  filter(controlq == 1) %>%
+  # exclude 'Expected Success' participants who chose fewer than 3 marked cards (n = 5)
+  filter(!(condition == "Cued" &
+             n_star_cards_selected != 3))
+
+table(df.memory_analysis$exclusion,
+      df.memory_analysis$hypothesis_alignment)
+
+```
+
+```{r}
+
+# n = 21
+
+df.memory_analysis =
+  df.memory_analysis %>%
+  # exclude distracted children as identified via LookIt videos (cf. https://docs.google.com/spreadsheets/d/1KdfXJgIPxcaOnFA-nAO5pHnJpJyVNks2Pt8U7tTYdoc/edit?gid=0#gid=0)
+  filter(exclusion != "Exclude")
+
+```
+
+Exclude excess children in Cued (n = 5):
+
+```{r}
+
+df.memory_analysis =
+  df.memory_analysis %>%
+  arrange(desc(subject_id)) %>%
+  group_by(condition) %>%
+  mutate(remove_flag = row_number() <= 5 &
+           condition == "Cued") %>%
+  ungroup() %>%
+  filter(!remove_flag) %>%
+  select(-remove_flag)
+
+```
+
+# Descriptives
+
+## Child Demographics
+
+Chance-based game:
+
+```{r}
+
+min(df.chance_analysis$age_years)
+max(df.chance_analysis$age_years)
+
+df.chance_analysis %>%
+  # group_by(condition) %>%
+  summarise(n = n(),
+            age = mean(age_years, na.rm = T),
+            sd_age = sd(age_years, na.rm = T),
+            # 1 is female
+            gender = mean(gender, na.rm = T)) %>%
+  mutate(across(.cols = where(~ is.numeric(.)),
+                .fns = ~ round(., digits = 2))) %>%
+  datatable()
+
+```
+
+```{r}
+
+df.chance_analysis %>%
+  group_by(condition, age_bin) %>%
+  count()
+
+```
+
+Memory game:
+
+```{r}
+
+min(df.memory_analysis$age_years)
+max(df.memory_analysis$age_years)
+
+df.memory_analysis %>%
+  # group_by(condition) %>%
+  summarise(n = n(),
+            age = mean(age_years, na.rm = T),
+            sd_age = sd(age_years, na.rm = T),
+            # 1 is female
+            gender = mean(gender, na.rm = T)) %>%
+  mutate(across(.cols = where(~ is.numeric(.)),
+                .fns = ~ round(., digits = 2))) %>%
+  datatable()
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  group_by(condition, age_bin) %>%
+  count()
+
+```
+
+# Counterbalancing checks
+
+Chance-based:
+
+```{r}
+
+df.chance_analysis %>%
+  count(flipped, condition)
+
+```
+
+```{r}
+
+# flipped not logged in chance protocol — counterbalancing regressions n/a
+# summary(clm(prediction ~ 1 + flipped,
+#             data = df.chance_analysis))
+#
+# summary(clm(surprise_binary ~ 1 + flipped,
+#             data = df.chance_analysis))
+#
+# summary(clm(surprise_likert ~ 1 + flipped,
+#             data = df.chance_analysis))
+
+```
+
+Memory:
+
+```{r}
+
+df.memory_analysis %>%
+  count(flipped, condition)
+
+```
+
+```{r}
+
+# regression
+summary(clm(prediction ~ 1 + flipped,
+            data = df.memory_analysis))
+
+summary(clm(surprise_binary ~ 1 + flipped,
+            data = df.memory_analysis))
+
+summary(clm(surprise_likert ~ 1 + flipped,
+            data = df.memory_analysis))
+
+```
+
+```{r fig.width = 21, fig.height = 12}
+
+df.memory_analysis %>%
+    ggplot(aes(x = flipped,
+           y = as.numeric(surprise_likert),
+           fill = flipped,
+           group = flipped,
+           color = flipped)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Counterbalancing",
+                    labels = c("'Not Surprised' First",
+                               "'Surprised' First"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("Not (0)", "A little (1)","Pretty (2)", "Very (3)")) +
+  labs(
+    subtitle = "How surprised are you?",
+    y = "Surprise response",
+    x = "Response order flipped?") +
+  theme_classic(base_size = 50) +
+  theme(legend.position = "none",
+        axis.ticks.length = unit(0.05, "cm"),
+        panel.spacing = unit(0.01, "lines"))
+
+```
+
+# Figures
+
+## Chance-Based
+
+### Prediction
+
+```{r fig.width = 21, fig.height = 12}
+
+plot.chance_prediction =
+  df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(prediction),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+    geom_segment(
+    x = 1.75, xend = 2.25,   
+    y = 1.6, yend = 1.6,
+    linetype = "dashed",
+    color = "#0C7BDC",
+    linewidth = 2
+  ) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("0 stars", "1 star","2 stars", "3 stars")) +
+  labs(
+       subtitle = "Do you think you'll get no stars, 1 star, 2 stars, or 3 stars?",
+       y = "Prediction",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines"))
+
+plot.chance_prediction
+
+# ggsave((paste0(figures_dir, "chance/chance_prediction.png")),
+#        plot = plot.chance_prediction,
+#        width = 21, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 30, fig.height = 12}
+
+df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(prediction),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+    geom_segment(
+    x = 1.75, xend = 2.25,   
+    y = 1.6, yend = 1.6,
+    linetype = "dashed",
+    color = "#0C7BDC",
+    linewidth = 2
+  ) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("0 stars", "1 star","2 stars", "3 stars")) +
+  labs(
+       subtitle = "Do you think you'll get no stars, 1 star, 2 stars, or 3 stars?",
+       y = "Prediction",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines")) +
+  facet_wrap(~age_bin)
+
+```
+
+### Binary Surprise
+
+```{r fig.width = 21, fig.height = 12}
+
+plot.chance_binary =
+  df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_binary),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = .5,
+               binwidth = .1,
+               color = "black") +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1, 2),
+                     labels = c("No (0)","Yes (1)")) +
+  labs(
+       subtitle = "Are you surprised, or are you not surprised?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+  theme(legend.position = "none",
+        axis.ticks.length = unit(0.05, "cm"),
+        panel.spacing = unit(0.01, "lines"))
+
+plot.chance_binary
+
+# ggsave((paste0(figures_dir, "chance/chance_binary_surprise.png")),
+#        plot = plot.chance_binary,
+#        width = 20, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 30, fig.height = 12}
+
+df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_binary),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = .5,
+               binwidth = .1,
+               color = "black") +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1, 2),
+                     labels = c("No (0)","Yes (1)")) +
+  labs(
+       subtitle = "Are you surprised, or are you not surprised?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+  theme(legend.position = "none",
+        axis.ticks.length = unit(0.05, "cm"),
+        panel.spacing = unit(0.01, "lines")) +
+    facet_wrap(~age_bin)
+
+```
+
+### Graded Surprise
+
+```{r fig.width = 20, fig.height = 12}
+
+plot.chance_graded =
+  df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_likert),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("Not (0)", "A little (1)","Pretty (2)", "Very (3)")) +
+  labs(
+       subtitle = "How surprised are you?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines"))
+
+plot.chance_graded
+
+# ggsave((paste0(figures_dir, "chance/chance_graded_surprise.png")),
+#        plot = plot.chance_graded,
+#        width = 20, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 30, fig.height = 12}
+
+df.chance_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_likert),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("Not (0)", "A little (1)","Pretty (2)", "Very (3)")) +
+  labs(
+       subtitle = "How surprised are you?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines")) +
+    facet_wrap(~age_bin)
+
+```
+
+```{r fig.width = 61, fig.height = 12}
+
+plot.chance_sidebyside =
+  plot.chance_prediction +
+  plot.chance_binary +
+  plot.chance_graded
+
+plot.chance_sidebyside +
+  theme(legend.position = "none")
+
+```
+
+## Memory
+
+### Prediction
+
+```{r fig.width = 21, fig.height = 12}
+
+plot.memory_prediction =
+  df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(prediction),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_segment(
+    x = 1.75, xend = 2.25,   
+    y = 1.53, yend = 1.53,
+    linetype = "dashed",
+    color = "#0C7BDC",
+    linewidth = 2
+  ) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("0 stars", "1 star","2 stars", "3 stars")) +
+  labs(
+       subtitle = "Do you think you'll get no stars, 1 star, 2 stars, or 3 stars?",
+       y = "Prediction",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines"))
+
+plot.memory_prediction
+
+# ggsave((paste0(figures_dir, "memory/memory_prediction.png")),
+#        plot = plot.memory_prediction,
+#        width = 21, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 22.5, fig.height = 12}
+
+df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(prediction),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_segment(
+    x = 1.75, xend = 2.25,   
+    y = 1.53, yend = 1.53,
+    linetype = "dashed",
+    color = "#0C7BDC",
+    linewidth = 2
+  ) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("0 stars", "1 star","2 stars", "3 stars")) +
+  labs(
+       subtitle = "Do you think you'll get no stars, 1 star, 2 stars, or 3 stars?",
+       y = "Prediction",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines")) +
+  facet_wrap(~age_bin)
+
+# ggsave((paste0(figures_dir, "memory/memory_prediction_age.png")),
+#        width = 21, height = 12, device = "png")
+
+```
+
+### Binary Surprise
+
+```{r fig.width = 20, fig.height = 12}
+
+plot.memory_binary =
+  df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_binary),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 5,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = .5,
+               binwidth = .1,
+               color = "black") +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1, 2),
+                     labels = c("No (0)","Yes (1)")) +
+  labs(
+       subtitle = "Are you surprised, or are you not surprised?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+  theme(legend.position = "none",
+        axis.ticks.length = unit(0.05, "cm"),
+        panel.spacing = unit(0.01, "lines"))
+
+plot.memory_binary
+
+# ggsave((paste0(figures_dir, "memory/memory_binary_surprise.png")),
+#        plot = plot.memory_binary,
+#        width = 20, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 21, fig.height = 12}
+
+df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_binary),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 5,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = .45,
+               binwidth = .1,
+               color = "black") +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1, 2),
+                     labels = c("No (0)","Yes (1)")) +
+  labs(
+       subtitle = "Are you surprised, or are you not surprised?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+  theme(legend.position = "none",
+        axis.ticks.length = unit(0.05, "cm"),
+        panel.spacing = unit(0.01, "lines")) +
+  facet_wrap(~age_bin)
+
+# ggsave((paste0(figures_dir, "memory/memory_binary_surprise_age.png")),
+#        width = 20, height = 12, device = "png")
+
+```
+
+### Graded Surprise
+
+```{r fig.width = 20, fig.height = 12}
+
+plot.memory_graded =
+  df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_likert),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1,
+               binwidth = .1,
+               alpha = 1,
+               color = "black") +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 4,
+           shape = 23,
+           fill = plotcolors,
+           color = "black",
+           linewidth = 2) +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("Not (0)", "A little (1)","Pretty (2)", "Very (3)")) +
+  labs(
+       subtitle = "How surprised are you?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines"))
+
+plot.memory_graded
+
+# ggsave((paste0(figures_dir, "memory/memory_graded_surprise.png")),
+#        plot = plot.memory_graded,
+#        width = 20, height = 12, device = "png")
+
+```
+
+By age:
+
+```{r fig.width = 21, fig.height = 12}
+
+df.memory_analysis %>%
+  ggplot(aes(x = condition,
+           y = as.numeric(surprise_likert),
+           fill = condition,
+           group = condition,
+           color = condition)) +
+  stat_summary(fun.data = "mean_cl_boot",
+           geom = "pointrange",
+           size = 5,
+           shape = 23,
+           color = "black",
+           linewidth = 2) +
+  geom_dotplot(binaxis = "y",
+               stackdir = "center",
+               dotsize = 1.25,
+               binwidth = .1,
+               color = "black") +
+  scale_fill_manual(name = "Condition",
+                    labels = c("Cued",
+                               "Uncued"),
+                    values = plotcolors) +
+  scale_color_manual(values = plotcolors,
+                     guide = "none") +
+  scale_y_continuous(breaks = c(1:4),
+                     labels = c("Not (0)", "A little (1)","Pretty (2)", "Very (3)")) +
+  labs(
+       subtitle = "How surprised are you?",
+       y = "Surprise response",
+       x = element_blank()) +
+  theme_classic(base_size = 50) +
+    theme(legend.position = "none",
+      axis.ticks.length = unit(0.05, "cm"),
+      panel.spacing = unit(0.01, "lines")) +
+  facet_wrap(~age_bin)
+
+# ggsave((paste0(figures_dir, "memory/memory_graded_surprise_age.png")),
+#        width = 20, height = 12, device = "png")
+
+```
+
+```{r fig.width = 61, fig.height = 12}
+
+plot.memory_sidebyside =
+  plot.memory_prediction +
+  plot.memory_binary +
+  plot.memory_graded
+
+plot.memory_sidebyside +
+  theme(legend.position = "none")
+
+```
+
+------------------------------------------------------------------------------------------
+
+# Inferential Statistics
+
+## Chance-Based Game
+
+### Prediction
+
+Table:
+
+```{r}
+
+df.chance_analysis %>%
+  count(condition, prediction)
+
+```
+
+```{r}
+
+df.chance_analysis %>%
+  mutate(prediction_numerical =
+           case_when(prediction == "0" ~ 0,
+                     prediction == "1" ~ 1,
+                     prediction == "2" ~ 2,
+                     prediction == "3" ~ 3)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(prediction_numerical),
+            sd = sd(prediction_numerical))
+
+```
+
+```{r}
+
+# The expected value for "Unexpected Success" is .6 because we can approximate each draw’s probability as: \mathbb{P}(\text{sun card}) = \frac{3}{15} = 0.2. Then: \mathbb{E}[X_1] = \mathbb{E}[X_2] = \mathbb{E}[X_3] = 0.2 \Rightarrow \mathbb{E}[X] = 0.2 + 0.2 + 0.2 = \boxed{0.6}
+
+temp =
+  df.chance_analysis %>%
+  # convert prediction scale values to numeric
+  mutate(prediction_numerical =
+           case_when(prediction == "0" ~ 0,
+                     prediction == "1" ~ 1,
+                     prediction == "2" ~ 2,
+                     prediction == "3" ~ 3)) %>%
+  filter(condition == "Uncued")
+
+# run t-test
+t.test(temp$prediction_numerical,
+       mu = .6,
+       alternative = "two.sided")
+
+```
+
+Between conditions:
+
+```{r}
+
+t.test(as.numeric(prediction) ~ condition,
+       alternative = "two.sided",
+       data = df.chance_analysis)
+
+```
+
+### Surprise vs Chance
+
+Is rate of surprise sig above 50%?
+
+```{r}
+
+temp =
+  df.chance_analysis %>%
+  filter(condition == "Uncued") %>%
+  mutate(surprise_binary = case_when(surprise_binary == "Surprised" ~ 1,
+                                     surprise_binary == "Not surprised" ~ 0))
+
+t.test(as.numeric(temp$surprise_binary),
+       mu = .5,
+       alternative = "greater")
+
+```
+
+### Binary Surprise
+
+Table:
+
+```{r}
+
+df.chance_analysis %>%
+  count(condition, surprise_binary)
+
+```
+
+```{r}
+
+df.chance_analysis %>%
+  mutate(surprise_binary_numerical =
+           case_when(surprise_binary == "Not surprised" ~ 0,
+                     surprise_binary == "Surprised" ~ 1)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(surprise_binary_numerical),
+            sd = sd(surprise_binary_numerical))
+
+```
+
+Regression:
+
+```{r fig.width = 14, fig.height = 8}
+
+# logistic regression
+fit.chance_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.chance_analysis)
+
+# print model outputs
+fit.chance_surprise %>%
+  summary()
+
+# plot model predictions
+probs.chance_surprise =
+  ggpredict(fit.chance_surprise)
+
+probs.chance_surprise
+
+plot(probs.chance_surprise) +
+  ylim(0, 1) +
+  labs(title = "Predicted Probabilities per Surprise Scale Value",
+       subtitle = "1 = Not surprised, 2 = Surprised",
+       x = "Condition",
+       y = "Predicted Probability") +
+  theme_classic(base_size = 18)
+
+```
+
+Checking for age interaction:
+
+```{r}
+
+# logistic regression
+fit.chance_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+    data = df.chance_analysis)
+
+# print model outputs
+fit.chance_surprise %>%
+  summary()
+
+```
+
+Wilcox:
+
+```{r}
+
+wilcox.test(as.numeric(surprise_binary) ~ condition,
+            data = df.chance_analysis)
+
+```
+
+### Graded Surprise
+
+Table:
+
+```{r}
+
+df.chance_analysis %>%
+  count(condition, surprise_likert)
+
+```
+
+```{r}
+
+df.chance_analysis %>%
+  mutate(surprise_likert_numerical =
+           case_when(surprise_likert == "Not surprised" ~ 0,
+                     surprise_likert == "A little surprised" ~ 1,
+                     surprise_likert == "Pretty surprised" ~ 2,
+                     surprise_likert == "Very surprised" ~ 3)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(surprise_likert_numerical),
+            sd = sd(surprise_likert_numerical))
+
+```
+
+Regression:
+
+```{r fig.width = 14, fig.height = 8}
+
+# logistic regression
+fit.chance_surprise_graded =
+  clm(
+    # graded surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.chance_analysis)
+
+# print model outputs
+fit.chance_surprise_graded %>%
+  summary()
+
+# plot model predictions
+probs.chance_surprise_graded =
+  ggpredict(fit.chance_surprise_graded)
+
+probs.chance_surprise_graded
+
+```
+
+Checking for age interaction:
+
+```{r}
+
+# logistic regression
+fit.chance_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+    data = df.chance_analysis)
+
+# print model outputs
+fit.chance_surprise %>%
+  summary()
+
+```
+
+Wilcox:
+
+```{r}
+
+wilcox.test(as.numeric(surprise_likert) ~ condition,
+            data = df.chance_analysis)
+
+```
+
+### Robustness Tests
+
+Correlation:
+
+```{r}
+
+cor.test(as.numeric(df.chance_analysis$prediction),
+         as.numeric(df.chance_analysis$surprise_likert),
+         method = "spearman")
+
+```
+
+```{r fig.width = 9, fig.height = 6}
+
+plot.correlation =
+  df.chance_analysis %>%
+  ggplot(aes(x = prediction,
+             y = surprise_likert)) +
+  geom_dotplot(dotsize = .7,
+               binaxis = "y",
+               stackdir = "center",
+               stackratio = 1,
+               color = "black",
+               fill = "lightblue") +
+  # geom_point(size = 3,
+  #            color = "black",
+  #            position = position_jitter(width = .075,
+  #                                       height = 0),
+  #            alpha = .2) +
+  labs(x = "A Priori Prediction",
+       y = "Post-Hoc Surprise Response")
+
+plot.correlation
+
+# ggsave((paste0(figures_dir, "chance/chance_correlation.png")),
+#        plot = plot.correlation,
+#        width = 9, height = 6, device = "png")
+
+```
+
+Subsetting for children who predicted 3 stars:
+
+```{r}
+
+df.robust_chance =
+  df.chance_analysis %>%
+  filter(prediction == 3)
+
+```
+
+```{r}
+
+# logistic regression
+fit.chance_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_chance)
+
+# print model outputs
+fit.chance_surprise %>%
+  summary()
+
+```
+
+```{r}
+
+# logistic regression
+fit.chance_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_chance)
+
+# print model outputs
+fit.chance_surprise %>%
+  summary()
+
+```
+
+## Memory Game
+
+### Manhattan Distance
+
+Visualization of what Manhattan distance means:
+
+```{r fig.width = 10, fig.height = 8}
+
+draw_manhattan =
+  function(n_rows = 5,
+           n_cols = 10,
+           target_row = 3,
+           target_col = 5,
+           highlight_dist = 3) {
+    grid = expand.grid(row = 1:n_rows, col = 1:n_cols) %>%
+      mutate(dist = abs(row - target_row) + abs(col - target_col),
+             highlight = dist == highlight_dist)
+    
+    ggplot(grid, aes(x = col, y = row)) +
+      geom_tile(aes(fill = dist), color = "grey85", size = 0.4) +
+      geom_tile(data = dplyr::filter(grid, highlight),
+                fill = NA, color = "red3", size = 1.2) +
+      geom_point(data = data.frame(row = target_row, col = target_col),
+                 aes(x = col, y = row), inherit.aes = FALSE,
+                 shape = 21, size = 4,
+                 fill = "gold", color = "black", stroke = 1.2) +
+      geom_text(aes(label = dist), size = 3) +
+      scale_fill_gradient(low = "#f0f9e8", high = "#2b8cbe",
+                          name = "Manhattan distance") +
+      coord_fixed(expand = FALSE) +
+      scale_x_continuous(breaks = 1:n_cols, minor_breaks = NULL) +
+      scale_y_reverse(breaks = 1:n_rows, minor_breaks = NULL) +
+      labs(x = "Column", y = "Row",
+           title = paste0(n_rows, "×",
+                          n_cols,
+                          " grid with Manhattan distance"),
+           subtitle = paste0("Target at row ", target_row, ", column ", target_col, " (red outline = distance ", highlight_dist, ")")) +
+      theme(legend.position = "right",
+            panel.border = element_rect(color = "black", fill = NA))
+    }
+
+# plot with 5x10 grid
+draw_manhattan(5, 10,
+               target_row = 3,
+               target_col = 5,
+               highlight_dist = 3)
+
+```
+
+```{r}
+
+df.memory_analysis =
+  df.memory_analysis %>% 
+  # compute mean value
+  mutate(mean_manhattan_distance =
+           case_when(condition == "Uncued" ~
+                       (first_choice_dist +
+                          second_choice_dist +
+                          third_choice_dist)/3,
+                     condition == "unsurprising" ~ NA))
+
+```
+
+Performance across trials:
+
+```{r}
+
+df.memory_analysis %>%
+  filter(condition == "Uncued") %>%
+  count(n_star_cards_selected)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  filter(condition == "Uncued") %>%
+  count(first_choice_dist)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  filter(condition == "Uncued") %>%
+  count(second_choice_dist)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  filter(condition == "Uncued") %>%
+  count(third_choice_dist)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  filter(condition == "Uncued") %>% 
+  summarise(avg_manhattan_distance = mean(mean_manhattan_distance),
+            sd_avg_manhattan_distance = sd(mean_manhattan_distance),
+            avg_first_choice_dist = mean(first_choice_dist),
+            avg_second_choice_dist = mean(second_choice_dist),
+            avg_third_choice_dist = mean(third_choice_dist))
+
+```
+
+Performance by trial:
+
+```{r}
+
+df.distance =
+  df.memory_analysis %>%
+  pivot_longer(cols = ends_with("_dist"),
+               names_to = "choice",
+               values_to = "distance") %>%
+  mutate(choice = factor(choice,
+                         levels = c("first_choice_dist",
+                                    "second_choice_dist",
+                                    "third_choice_dist"),
+                         labels = c("First Trial",
+                                    "Second Trial",
+                                    "Third Trial")))
+
+```
+
+```{r}
+
+df.distance %>%
+  filter(condition == "Uncued") %>%
+  group_by(choice) %>%
+  summarise(mean = mean(distance, na.rm = T),
+            sd = sd(distance, na.rm = T))
+
+summary(lm(distance ~ choice, data = df.distance %>%  filter(condition == "Uncued")))
+
+```
+
+```{r fig.width = 12, fig.height = 7}
+
+ggplot(df.memory_analysis,
+       aes(x = mean_manhattan_distance)) +
+  geom_histogram(color = "white", bins = 10,
+                 fill = "black") +
+  labs(x = "Mean manhattan distance across trials",
+       y = "# of children",
+       title = "Distribution of mean manhattan distance across 3 trials") +
+  scale_x_continuous(limits = c(0, 3),
+                     breaks = seq(0, 3, by = 0.33)) +
+  scale_y_continuous(limits = c(0, 10),
+                     breaks = c(seq(0, 10, 1))) +
+  theme_classic(base_size = 24)
+
+```
+
+```{r fig.width = 12, fig.height = 7}
+
+df.distance %>%
+  filter(condition == "Uncued") %>% 
+  ggplot(aes(x = choice, y = distance)) +
+  geom_boxplot(width = .15, outlier.shape = NA) +
+  geom_jitter(width = .05, height = .02, alpha = .3, size = 4) +
+  labs(x = "Choice", y = "Distance to true location (Manhattan)",
+       title = "Per-trial distance between participant choice and true location") +
+  theme_classic(base_size = 24)
+
+```
+
+```{r fig.width = 14, fig.height = 7}
+
+df.distance %>%
+  filter(condition == "Uncued") %>% 
+  ggplot(aes(x = choice, y = distance,
+             group = subject_id)) +
+  geom_line(alpha = 0.3, size = 1, color = "steelblue") +
+  geom_jitter(height = 0, width = .05, alpha = 0.3, size = 5) +
+  labs(x = "Trial", y = "Manhattan distance",
+       title = "WITHIN-PARTICIPANT trajectories:\nDistance between participant choice and true card location across trials") +
+    theme_classic(base_size = 24)
+
+```
+
+In "Unexpected Success", does Manhattan Distance negatively correlate with surprise so
+that card picks closer to true locations lead to lower levels of reported surprise?
+
+```{r}
+
+temp =
+  df.memory_analysis %>% 
+  filter(condition == "Uncued")
+
+summary(clm(surprise_binary ~ 1 + mean_manhattan_distance,
+            data = temp))
+
+summary(clm(surprise_likert ~ 1 + mean_manhattan_distance,
+            data = temp))
+
+```
+
+```{r fig.width = 12, fig.height = 8}
+
+plot.correlation =
+  temp %>%
+  ggplot(aes(x = mean_manhattan_distance,
+             y = surprise_likert)) +
+  geom_dotplot(dotsize = .5,
+               binaxis = "x",
+               stackratio = 1,
+               color = "black",
+               fill = "lightblue") +
+  scale_x_continuous(limits = c(0, 3),
+                     breaks = c(seq(0, 3, .333))) +
+  labs(x = "Mean Manhattan Distance of Card Picks",
+       y = "Post-Hoc Surprise Response")
+
+plot.correlation
+
+# ggsave((paste0(figures_dir, "memory/distance_correlation.png")),
+#        plot = plot.correlation,
+#        width = 12, height = 8, device = "png")
+
+```
+
+### Prediction
+
+Table:
+
+```{r}
+
+df.memory_analysis %>%
+  count(condition, prediction)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  mutate(prediction_numerical =
+           case_when(prediction == "0" ~ 0,
+                     prediction == "1" ~ 1,
+                     prediction == "2" ~ 2,
+                     prediction == "3" ~ 3)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(prediction_numerical),
+            sd = sd(prediction_numerical))
+
+```
+
+True performance:
+
+```{r}
+
+df.memory_analysis %>%
+  count(condition, n_star_cards_selected)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  group_by(condition) %>%
+  summarise(mean = mean(n_star_cards_selected),
+            median = median(n_star_cards_selected),
+            sd = sd(n_star_cards_selected))
+
+```
+
+Between conditions:
+
+```{r}
+
+t.test(as.numeric(prediction) ~ condition,
+       alternative = "two.sided",
+       data = df.memory_analysis)
+
+```
+
+Comparison:
+
+```{r}
+
+# Children's true performance is .56.
+
+temp =
+  df.memory_analysis %>%
+  # convert prediction scale values to numeric
+  mutate(prediction_numerical =
+           case_when(prediction == "0" ~ 0,
+                     prediction == "1" ~ 1,
+                     prediction == "2" ~ 2,
+                     prediction == "3" ~ 3)) %>%
+  filter(condition == "Uncued")
+
+# run t-test
+t.test(temp$prediction_numerical,
+       mu = mean(temp$n_star_cards_selected),
+       alternative = "two.sided")
+
+```
+
+### Surprise vs Chance
+
+```{r}
+
+temp =
+  df.memory_analysis %>%
+  filter(condition == "Uncued") %>%
+  mutate(surprise_binary = case_when(surprise_binary == "Surprised" ~ 1,
+                                     surprise_binary == "Not surprised" ~ 0))
+
+t.test(as.numeric(temp$surprise_binary),
+       mu = .5,
+       alternative = "greater")
+
+```
+
+### Binary Surprise
+
+Table:
+
+```{r}
+
+df.memory_analysis %>%
+  count(condition, surprise_binary)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  mutate(surprise_binary_numerical =
+           case_when(surprise_binary == "Not surprised" ~ 0,
+                     surprise_binary == "Surprised" ~ 1)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(surprise_binary_numerical),
+            sd = sd(surprise_binary_numerical))
+
+```
+
+Regression:
+
+```{r fig.width = 14, fig.height = 8}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+      # control for true performance
+      # n_star_cards_selected,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+# plot model predictions
+probs.memory_surprise =
+  ggpredict(fit.memory_surprise)
+
+probs.memory_surprise
+
+plot(probs.memory_surprise) +
+  ylim(0, 1) +
+  labs(title = "Predicted Probabilities per Surprise Scale Value",
+       subtitle = "1 = Not surprised, 2 = Surprised",
+       x = "Condition, age_years] ",
+       y = "Predicted Probability") +
+  theme_classic(base_size = 18)
+
+```
+
+Just age:
+
+```{r}
+
+# logistic regression
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # age as predictor
+      age_bin,
+    data = df.memory_analysis)
+)
+
+```
+
+Age moderation:
+
+```{r fig.width = 14, fig.height = 8}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+      # control for true performance
+      # n_star_cards_selected,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+# plot model predictions
+probs.memory_surprise =
+  ggpredict(fit.memory_surprise)
+
+plot(probs.memory_surprise)
+
+```
+
+```{r}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_years,
+      # control for true performance
+      # n_star_cards_selected,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+# plot model predictions
+probs.memory_surprise =
+  ggpredict(fit.memory_surprise)
+
+plot(probs.memory_surprise)
+
+```
+
+Subsetting for 4s:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+      # control for true performance
+      # n_star_cards_selected,
+    data = df.memory_analysis %>%
+      filter(age_bin == 4))
+  )
+
+```
+
+Subsetting for 5s:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+      # control for true performance
+      # n_star_cards_selected,
+    data = df.memory_analysis %>%
+      filter(age_bin == 5))
+  )
+
+```
+
+Wilcox:
+
+```{r}
+
+wilcox.test(as.numeric(surprise_binary) ~ condition,
+            data = df.memory_analysis)
+
+```
+
+### Graded Surprise
+
+Table:
+
+```{r}
+
+df.memory_analysis %>%
+  count(condition, surprise_likert)
+
+```
+
+```{r}
+
+df.memory_analysis %>%
+  mutate(surprise_likert_numerical =
+           case_when(surprise_likert == "Not surprised" ~ 0,
+                     surprise_likert == "A little surprised" ~ 1,
+                     surprise_likert == "Pretty surprised" ~ 2,
+                     surprise_likert == "Very surprised" ~ 3)) %>%
+  group_by(condition) %>%
+  summarise(mean = mean(surprise_likert_numerical),
+            sd = sd(surprise_likert_numerical))
+
+```
+
+Regression:
+
+```{r fig.width = 14, fig.height = 8}
+
+# logistic regression
+fit.memory_surprise_graded =
+  clm(
+    # graded surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise_graded %>%
+  summary()
+
+# plot model predictions
+probs.memory_surprise_graded =
+  ggpredict(fit.memory_surprise_graded)
+
+probs.memory_surprise_graded
+
+```
+
+Wilcox:
+
+```{r}
+
+wilcox.test(as.numeric(surprise_likert) ~ condition,
+            data = df.memory_analysis)
+
+```
+
+Age as sole predictor:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # age as predictor
+      age_bin,
+    data = df.memory_analysis))
+
+```
+
+Age moderation effect:
+
+```{r}
+
+# logistic regression
+fit.memory_surprise_graded =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise_graded %>%
+  summary()
+
+# logistic regression
+fit.memory_surprise_graded =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_years,
+    data = df.memory_analysis)
+
+# print model outputs
+fit.memory_surprise_graded %>%
+  summary()
+
+```
+
+```{r fig.height = 3, fig.width = 8}
+
+# plot model predictions
+probs.memory_surprise =
+  ggpredict(fit.memory_surprise_graded,
+            terms = c("age_years", "condition"))
+
+plot(probs.memory_surprise,
+     n_rows = 1) + 
+  scale_y_continuous(limits = c(0, 1),
+                     breaks = c(0, .25, .5, .75, 1)) +
+  labs(y = "P of endorsing Likert scale value",
+       x = "Age in years (cont.)",
+       title = "Model output: Predicted probabilities by Likert scale value & age") +
+  theme(legend.position = "top")
+
+```
+
+Subsetting for 4s:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.memory_analysis %>%
+      filter(age_bin == 4)))
+
+```
+
+Subsetting for 5s:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.memory_analysis %>%
+      filter(age_bin == 5))
+  )
+
+```
+
+### Robustness Tests
+
+Correlation:
+
+```{r}
+
+cor.test(as.numeric(df.memory_analysis$prediction),
+         as.numeric(df.memory_analysis$surprise_likert),
+         method = "spearman")
+
+```
+
+```{r fig.width = 9, fig.height = 6}
+
+plot.correlation =
+  df.memory_analysis %>%
+  ggplot(aes(x = prediction,
+             y = surprise_likert)) +
+  geom_dotplot(dotsize = .7,
+               binaxis = "y",
+               stackdir = "center",
+               stackratio = 1,
+               color = "black",
+               fill = "lightblue") +
+  # geom_point(size = 3,
+  #            color = "black",
+  #            position = position_jitter(width = .075,
+  #                                       height = 0),
+  #            alpha = .2) +
+  labs(x = "A Priori Prediction",
+       y = "Post-Hoc Surprise Response")
+
+plot.correlation
+
+# ggsave((paste0(figures_dir, "memory/memory_correlation.png")),
+#        plot = plot.correlation,
+#        width = 9, height = 6, device = "png")
+
+```
+
+Subsetting for children who predicted 3 stars:
+
+```{r}
+
+df.robust_memory =
+  df.memory_analysis %>%
+  filter(prediction == 3)
+
+```
+
+```{r}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_memory)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+```
+
+```{r}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_memory)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+```
+
+Age effects for subset:
+
+```{r}
+
+df.robust_memory %>%
+  group_by(condition, age_bin) %>%
+  count()
+
+```
+
+Age as sole predictor:
+
+```{r}
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # age as predictor
+      age_bin,
+    data = df.robust_memory)
+  )
+
+
+summary(
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # age as predictor
+      age_bin,
+    data = df.robust_memory)
+  )
+
+```
+
+Moderation:
+
+```{r}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+    data = df.robust_memory)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition * age_bin,
+    data = df.robust_memory)
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+```
+
+Subsetting for 5s:
+
+```{r}
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_binary ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_memory %>%
+      filter(age_bin == 5))
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+# logistic regression
+fit.memory_surprise =
+  clm(
+    # binary surprise is DV
+    surprise_likert ~
+      # intercept
+      1 +
+      # condition as predictor
+      condition,
+    data = df.robust_memory %>%
+      filter(age_bin == 5))
+
+# print model outputs
+fit.memory_surprise %>%
+  summary()
+
+```
+
+# Non-3 Choosers
+
+Chance-Based:
+
+```{r}
+
+df.chance %>%
+  # exclude incomplete sessions
+  filter(completed == T) %>%
+  # exclude wrong control q answers
+  filter(controlq == 1) %>%
+  filter(no_marked_cards < 3) %>%
+  count(prediction, surprise_binary)
+
+df.chance %>%
+  # exclude incomplete sessions
+  filter(completed == T) %>%
+  # exclude wrong control q answers
+  filter(controlq == 1) %>%
+  filter(no_marked_cards < 3) %>%
+  count(prediction, surprise_likert)
+
+```
+
+Memory:
+
+```{r}
+
+df.memory %>%
+  # exclude incomplete sessions
+  filter(completed == T) %>%
+  # exclude wrong control q answers
+  filter(controlq == 1) %>%
+  filter(condition == "Cued",
+         n_star_cards_selected < 3) %>%
+  count(prediction, surprise_binary)
+
+df.memory %>%
+  # exclude incomplete sessions
+  filter(completed == T) %>%
+  # exclude wrong control q answers
+  filter(controlq == 1) %>%
+  filter(condition == "Cued",
+         n_star_cards_selected < 3) %>%
+  count(prediction, surprise_likert)
+
+```
+
+# Main Analyses Including Interference/Distraction Kids
+
+*Chance-based*
+
+```{r}
+
+df.qualitative =
+  df.chance %>%
+  # exclude incomplete sessions (n = 6)
+  filter(completed == T) %>%
+  # exclude children who chose fewer than 3 marked cards in unsurprising (n = 5)
+  filter(!(condition == "Cued" & no_marked_cards != 3))
+# but keep kids who were distracted
+
+```
+
+Prediction:
+
+```{r}
+
+df.qualitative %>%
+  count(condition, prediction)
+
+```
+
+Binary surprise:
+
+```{r}
+
+summary(
+  clm(surprise_binary ~ condition,
+      data = df.qualitative %>% 
+        filter(prediction == 3))
+)
+
+```
+
+Graded surprise:
+
+```{r}
+
+summary(
+  clm(surprise_likert ~ condition,
+      data = df.qualitative %>%
+        filter(prediction == 3))
+)
+
+```
+
+*Memory*
+
+```{r}
+
+df.qualitative =
+  df.memory %>%
+  # filter participants too young (under 4; n = 1)
+  filter(age_years > 4.00) %>%
+  # exclude incomplete sessions (n = 4)
+  filter(completed == T) %>%
+  # exclude wrong control q answers (n = 7)
+  filter(controlq == 1) %>%
+  # exclude 'Expected Success' participants who chose fewer than 3 marked cards (n = 5)
+  filter(!(condition == "Cued" &
+             n_star_cards_selected != 3))
+
+```
+
+Prediction
+
+```{r}
+
+df.qualitative %>%
+  count(condition, prediction)
+
+```
+
+Binary surprise:
+
+```{r}
+
+summary(
+  clm(surprise_binary ~ condition,
+      data = df.qualitative %>% 
+        filter(prediction == 3))
+)
+
+summary(
+  clm(surprise_binary ~ condition * age_bin,
+      data = df.qualitative)
+)
+
+```
+
+Graded surprise:
+
+```{r}
+
+summary(
+  clm(surprise_likert ~ condition,
+      data = df.qualitative %>% 
+        filter(prediction == 3))
+)
+
+summary(
+  clm(surprise_likert ~ condition * age_bin,
+      data = df.qualitative)
+  )
+
+```
