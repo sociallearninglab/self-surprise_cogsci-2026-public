@@ -29,7 +29,6 @@ what children say they can do and what they think they can do.
 
 ![methods figure](figures/cogsci_2026_fig1.png)
 
-both experiments followed the same structure: kids chose cards, predicted how many stars they got, then saw the reveal and rated their surprise.
 
 - **exp 1** (N=48): probability-based card game. two between-subjects conditions — Uncued (star locations unknown) vs. Cued (star locations marked). run on Lookit.
 - **exp 2** (N=64): memory-based card game. same CHOICE → PREDICTION → REVEAL & SURPRISE structure. run on Lookit.
