@@ -25,6 +25,13 @@ what children say they can do and what they think they can do.
 
 ---
 
+## preregistration
+
+- **exp 1:** https://aspredicted.org/m67mz9.pdf
+- **exp 2:** https://aspredicted.org/m67mz9.pdf
+
+---
+
 ## methods
 
 ![methods figure](figures/cogsci_2026_fig1.png)
